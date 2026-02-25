@@ -5,12 +5,13 @@ set -euo pipefail
 # Usage: ~/cm <command> [project]
 #
 # Commands:
-#   a <project>   Smart attach (start if needed, restart Claude if crashed, attach)
-#   s <project>   Start a new container
-#   x <project>   Stop and remove container
+#   a  <project>  Smart attach (start if needed, restart Claude if crashed, attach)
+#   s  <project>  Start a new container
+#   x  <project>  Stop and remove container
+#   au <project>  Auth setup (interactive container with writable credential mounts)
 #   st            Show status of all projects
-#   l <project>   Show container logs (last 50 lines)
-#   r <project>   Rebuild Docker image from .devcontainer/
+#   l  <project>  Show container logs (last 50 lines)
+#   r  <project>  Rebuild Docker image from .devcontainer/
 
 WORKSPACE_DIR="$HOME/workspace"
 CONFIG_BASE="$HOME/claude-configs"
@@ -22,12 +23,13 @@ usage() {
     echo "Usage: $0 <command> [project]"
     echo ""
     echo "Commands:"
-    echo "  a <project>   Smart attach (start → restart → attach)"
-    echo "  s <project>   Start a new container"
-    echo "  x <project>   Stop and remove container"
-    echo "  st            Show status of all projects"
-    echo "  l <project>   Show container logs"
-    echo "  r <project>   Rebuild Docker image"
+    echo "  a  <project>   Smart attach (start → restart → attach)"
+    echo "  s  <project>   Start a new container"
+    echo "  x  <project>   Stop and remove container"
+    echo "  au <project>   Auth setup (interactive shell with writable credential mounts)"
+    echo "  st             Show status of all projects"
+    echo "  l  <project>   Show container logs"
+    echo "  r  <project>   Rebuild Docker image"
     exit 1
 }
 
@@ -60,6 +62,42 @@ container_name() {
 
 image_name() {
     echo "claude-$1"
+}
+
+auth() {
+    local project="$1"
+    local image=$(image_name "$project")
+    local workspace="$WORKSPACE_DIR/$project"
+
+    if [ ! -d "$workspace" ]; then
+        echo "Error: Workspace not found at $workspace"
+        exit 1
+    fi
+
+    # Build image if needed
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+        echo "Image $image not found, building..."
+        build "$project"
+    fi
+
+    # Create auth directories on host if they don't exist
+    mkdir -p "$HOME/.config/gh" "$HOME/.aws" "$HOME/.railway"
+
+    echo "Starting auth setup container..."
+    echo "Run your auth commands inside, then type 'exit' when done."
+    echo ""
+    echo "  gh auth login        # GitHub CLI"
+    echo "  aws configure        # AWS credentials"
+    echo "  railway login        # Railway CLI"
+    echo ""
+
+    docker run -it --rm \
+        --name "claude-${project}-auth" \
+        -v "$HOME/.config/gh:/home/node/.config/gh" \
+        -v "$HOME/.aws:/home/node/.aws" \
+        -v "$HOME/.railway:/home/node/.railway" \
+        "$image" \
+        /bin/bash
 }
 
 start() {
@@ -96,7 +134,11 @@ start() {
     # Build optional auth mounts (read-only, only if they exist on host)
     local auth_mounts=""
     [ -d "$HOME/.ssh" ] && auth_mounts="$auth_mounts -v $HOME/.ssh:/home/node/.ssh:ro"
-    [ -f "$HOME/.gitconfig" ] && auth_mounts="$auth_mounts -v $HOME/.gitconfig:/home/node/.gitconfig:ro"
+    if [ -f "$HOME/.gitconfig" ]; then
+        auth_mounts="$auth_mounts -v $HOME/.gitconfig:/home/node/.gitconfig:ro"
+    elif [ -f "$HOME/.config/git/config" ]; then
+        auth_mounts="$auth_mounts -v $HOME/.config/git/config:/home/node/.gitconfig:ro"
+    fi
     [ -d "$HOME/.config/gh" ] && auth_mounts="$auth_mounts -v $HOME/.config/gh:/home/node/.config/gh:ro"
     [ -d "$HOME/.aws" ] && auth_mounts="$auth_mounts -v $HOME/.aws:/home/node/.aws:ro"
     [ -d "$HOME/.railway" ] && auth_mounts="$auth_mounts -v $HOME/.railway:/home/node/.railway:ro"
@@ -140,6 +182,10 @@ attach() {
     if ! docker ps -q -f "name=^${container}$" | grep -q .; then
         echo "Container not running, starting..."
         start "$project"
+    else
+        # Container already running — re-validate (tokens may have expired)
+        echo "Re-validating config..."
+        docker exec "$container" /usr/local/bin/validate-config.sh || true
     fi
 
     # Check if tmux session exists, restart if needed
@@ -234,6 +280,10 @@ case "$1" in
     a|attach)
         [ $# -lt 2 ] && usage
         attach "$2"
+        ;;
+    au|auth)
+        [ $# -lt 2 ] && usage
+        auth "$2"
         ;;
     s|start)
         [ $# -lt 2 ] && usage
