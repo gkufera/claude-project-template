@@ -26,11 +26,14 @@ cd ~/Work/my-project
 # Initialize Claude Code infrastructure
 ~/claude-project-template/init-claude.sh "My Project Name"
 
-# Or with a custom test command:
+# With custom test command:
 ~/claude-project-template/init-claude.sh "My Project Name" "cd frontend && npm test && cd ../backend && npm test"
+
+# With custom test command AND ntfy topic:
+~/claude-project-template/init-claude.sh "My Project Name" "npm test" "my-secret-topic"
 ```
 
-The init script copies template files into your project and substitutes `{{PROJECT_NAME}}` and `{{TEST_COMMAND}}` placeholders.
+The init script copies template files into your project and substitutes `{{PROJECT_NAME}}`, `{{TEST_COMMAND}}`, and `{{NTFY_TOPIC}}` placeholders.
 
 ## Template Variables
 
@@ -38,6 +41,7 @@ The init script copies template files into your project and substitutes `{{PROJE
 |----------|---------|---------|
 | `{{PROJECT_NAME}}` | *(required)* | Notification titles, agent prompts |
 | `{{TEST_COMMAND}}` | `npm test` | Rules, deploy command, QA reviewer, PM orchestrator |
+| `{{NTFY_TOPIC}}` | *(placeholder)* | `notify.sh` — ntfy.sh topic for push notifications |
 
 ## Slash Commands
 
@@ -88,11 +92,23 @@ Server host (Ubuntu)
 ├── ~/claude-configs/<project>/       # Per-project Claude configs
 │   ├── .credentials.json             # Auth (synced from ~/.claude/)
 │   └── settings.json                 # Overwritten by container on start
+├── ~/.ssh/                           # SSH keys (mounted read-only into containers)
+├── ~/.gitconfig                      # Git config (mounted read-only into containers)
+├── ~/.config/gh/                     # GitHub CLI auth (mounted read-only if present)
+├── ~/.aws/                           # AWS credentials (mounted read-only if present)
+├── ~/.railway/                       # Railway auth (mounted read-only if present)
 └── Docker containers (one per project)
     ├── /workspace                    # ← bind mount of ~/workspace/<project>
     ├── /home/node/.claude            # ← bind mount of ~/claude-configs/<project>
+    ├── /home/node/.ssh (ro)          # ← bind mount of ~/.ssh (if present)
+    ├── /home/node/.gitconfig (ro)    # ← bind mount of ~/.gitconfig (if present)
+    ├── /home/node/.config/gh (ro)    # ← bind mount of ~/.config/gh (if present)
+    ├── /home/node/.aws (ro)          # ← bind mount of ~/.aws (if present)
+    ├── /home/node/.railway (ro)      # ← bind mount of ~/.railway (if present)
     └── tmux session "claude"         # Claude Code runs here
 ```
+
+Auth configs are mounted **read-only** — the container consumes credentials but never writes back to the host. Run `gh auth login`, `aws configure`, etc. on the host, not inside containers.
 
 ### Container Manager: `~/cm`
 
@@ -116,8 +132,10 @@ Multiple clients can attach simultaneously via tmux.
 
 ### Container Features
 
-- **Base**: Node 20 with Claude Code, tmux, zsh, gh, AWS CLI, Railway CLI
-- **Firewall**: Outbound restricted to: GitHub, npm, Anthropic API, ntfy.sh, Railway, Cloudflare, AWS (S3, SES, CloudFront, STS, IAM), PyPI
+- **Base**: Node 20 with Claude Code, tmux, zsh, gh, AWS CLI, Railway CLI, Python 3
+- **Firewall**: Outbound restricted to: GitHub (incl. Actions), npm, Anthropic API, ntfy.sh, Railway, Cloudflare, AWS (S3, SES, CloudFront, STS, IAM), PyPI
+- **Auth mounts**: SSH keys, `.gitconfig`, gh, AWS, and Railway configs mounted read-only from host
+- **Startup validation**: `validate-config.sh` checks config on container start — warns about missing auth, unset git config, placeholder topics
 - **Notifications**: Push notifications via [ntfy.sh](https://ntfy.sh) with project name in the title
 - **Config isolation**: Each project gets its own `~/claude-configs/<project>/` directory
 
@@ -170,6 +188,70 @@ If you modify `.devcontainer/Dockerfile`, `notify.sh`, or `init-firewall.sh`:
 ~/cm r <project>     # Rebuild image
 ~/cm a <project>     # Start fresh and attach
 ```
+
+### Server Setup Guide (One-Time Per Server)
+
+These steps are done once when setting up a new server. All auth happens on the **host** — credentials are then mounted read-only into every container.
+
+1. **Install `cm` script**
+   ```bash
+   scp cm your-server:~/cm
+   ssh your-server chmod +x ~/cm
+   ```
+
+2. **SSH key** (for git push/pull over SSH)
+   ```bash
+   ssh-keygen -t ed25519
+   # Add ~/.ssh/id_ed25519.pub to GitHub → Settings → SSH keys
+   ```
+
+3. **Git config**
+   ```bash
+   git config --global user.name "Your Name"
+   git config --global user.email "you@example.com"
+   ```
+
+4. **GitHub CLI**
+   ```bash
+   gh auth login
+   # Verify: gh auth status
+   ```
+
+5. **AWS credentials** (if project uses S3/SES/CloudFront)
+   ```bash
+   aws configure
+   # Verify: aws sts get-caller-identity
+   ```
+
+6. **Railway CLI** (if project deploys to Railway)
+   ```bash
+   railway login
+   # Verify: railway whoami
+   ```
+
+7. **ntfy.sh topic** — subscribe to your topic in the ntfy app on your phone
+
+### New Project Checklist
+
+Steps to add a new project to the server:
+
+1. **On your local machine**: Initialize Claude Code infrastructure
+   ```bash
+   cd ~/Work/my-project
+   ~/claude-project-template/init-claude.sh "My Project" "npm test" "my-ntfy-topic"
+   ```
+2. **Edit** `.devcontainer/notify.sh` if NTFY_TOPIC is still a placeholder
+3. **Commit and push** `.claude/` and `.devcontainer/`
+4. **On the server**: Clone the repo
+   ```bash
+   git clone git@github.com:user/my-project.git ~/workspace/my-project
+   ```
+5. **Start the container**
+   ```bash
+   ~/cm a my-project
+   ```
+6. **Check validation output** — `validate-config.sh` runs automatically and warns about missing auth
+7. **Verify ntfy notification** arrives on your phone with the project name
 
 ## Notifications (ntfy.sh)
 

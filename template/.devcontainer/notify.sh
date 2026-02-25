@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-NTFY_TOPIC="gkgkgkgkgk"
+NTFY_TOPIC="{{NTFY_TOPIC}}"
 TITLE="${1:-Claude Code}"
 MESSAGE="${2:-Needs your attention}"
 PRIORITY="${3:-default}"

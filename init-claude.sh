@@ -5,13 +5,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR/template"
 
 usage() {
-    echo "Usage: $0 [--force] <project-name> [test-command]"
+    echo "Usage: $0 [--force] <project-name> [test-command] [ntfy-topic]"
     echo ""
     echo "Initialize Claude Code infrastructure in the current git repository."
     echo ""
     echo "Arguments:"
     echo "  project-name   Human-readable name shown in notifications (e.g., 'Slug Max')"
     echo "  test-command   Tier 1 test command (default: 'npm test')"
+    echo "  ntfy-topic     ntfy.sh topic for push notifications (default: placeholder)"
     echo ""
     echo "Options:"
     echo "  --force        Overwrite existing .claude/ and .devcontainer/ directories"
@@ -19,6 +20,7 @@ usage() {
     echo "Examples:"
     echo "  $0 'My Project'"
     echo "  $0 'My Project' 'cd frontend && npm test && cd ../backend && npm test'"
+    echo "  $0 'My Project' 'npm test' 'my-secret-topic'"
     echo "  $0 --force 'My Project'"
     exit 1
 }
@@ -37,6 +39,11 @@ fi
 
 PROJECT_NAME="$1"
 TEST_COMMAND="${2:-npm test}"
+if [ $# -ge 3 ]; then
+    NTFY_TOPIC="$3"
+else
+    NTFY_TOPIC='{{NTFY_TOPIC}}'
+fi
 
 # Check we're in a git repo
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -73,12 +80,13 @@ cp "$TEMPLATE_DIR/PLAN.md" .
 cp "$TEMPLATE_DIR/roadmap.md" .
 
 # Make scripts executable
-chmod +x .devcontainer/notify.sh .devcontainer/init-firewall.sh
+chmod +x .devcontainer/notify.sh .devcontainer/init-firewall.sh .devcontainer/validate-config.sh
 
 # Substitute template variables
 # Escape sed special characters in replacement strings (& and \)
 ESCAPED_NAME=$(printf '%s\n' "$PROJECT_NAME" | sed 's/[&\\/]/\\&/g')
 ESCAPED_TEST=$(printf '%s\n' "$TEST_COMMAND" | sed 's/[&\\/]/\\&/g')
+ESCAPED_TOPIC=$(printf '%s\n' "$NTFY_TOPIC" | sed 's/[&\\/]/\\&/g')
 
 find .claude .devcontainer PLAN.md roadmap.md -type f | while read -r file; do
     # Skip binary files (check for text, JSON, or any script-like content)
@@ -86,9 +94,11 @@ find .claude .devcontainer PLAN.md roadmap.md -type f | while read -r file; do
         # macOS sed requires -i '' ; GNU sed uses -i without arg
         if sed -i '' "s|{{PROJECT_NAME}}|${ESCAPED_NAME}|g" "$file" 2>/dev/null; then
             sed -i '' "s|{{TEST_COMMAND}}|${ESCAPED_TEST}|g" "$file"
+            sed -i '' "s|{{NTFY_TOPIC}}|${ESCAPED_TOPIC}|g" "$file"
         else
             sed -i "s|{{PROJECT_NAME}}|${ESCAPED_NAME}|g" "$file"
             sed -i "s|{{TEST_COMMAND}}|${ESCAPED_TEST}|g" "$file"
+            sed -i "s|{{NTFY_TOPIC}}|${ESCAPED_TOPIC}|g" "$file"
         fi
     fi
 done
@@ -107,4 +117,5 @@ echo "  1. Edit .claude/rules.txt to add project-specific rules"
 echo "  2. Edit roadmap.md to add your tasks"
 echo "  3. Review .claude/settings.json permissions for your stack"
 echo "  4. If using a remote server, review .devcontainer/ configs"
-echo "  5. Copy ~/.claude/notify.sh to your machine (for local notifications)"
+echo "  5. If NTFY_TOPIC is still a placeholder, edit .devcontainer/notify.sh"
+echo "  6. Copy .devcontainer/notify.sh to ~/.claude/notify.sh (for local notifications)"

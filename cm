@@ -93,13 +93,23 @@ start() {
     sync_creds "$project"
     copy_settings "$project"
 
+    # Build optional auth mounts (read-only, only if they exist on host)
+    local auth_mounts=""
+    [ -d "$HOME/.ssh" ] && auth_mounts="$auth_mounts -v $HOME/.ssh:/home/node/.ssh:ro"
+    [ -f "$HOME/.gitconfig" ] && auth_mounts="$auth_mounts -v $HOME/.gitconfig:/home/node/.gitconfig:ro"
+    [ -d "$HOME/.config/gh" ] && auth_mounts="$auth_mounts -v $HOME/.config/gh:/home/node/.config/gh:ro"
+    [ -d "$HOME/.aws" ] && auth_mounts="$auth_mounts -v $HOME/.aws:/home/node/.aws:ro"
+    [ -d "$HOME/.railway" ] && auth_mounts="$auth_mounts -v $HOME/.railway:/home/node/.railway:ro"
+
     echo "Starting container $container..."
+    # shellcheck disable=SC2086
     docker run -d \
         --name "$container" \
         --cap-add=NET_ADMIN \
         --cap-add=NET_RAW \
         -v "$workspace:/workspace" \
         -v "$config_dir:/home/node/.claude" \
+        $auth_mounts \
         -e "NODE_OPTIONS=--max-old-space-size=4096" \
         -e "CLAUDE_CONFIG_DIR=/home/node/.claude" \
         -e "POWERLEVEL9K_DISABLE_GITSTATUS=true" \
@@ -109,6 +119,9 @@ start() {
 
     echo "Running firewall setup..."
     docker exec "$container" sudo /usr/local/bin/init-firewall.sh
+
+    echo "Running config validation..."
+    docker exec "$container" /usr/local/bin/validate-config.sh || true
 
     echo "Starting tmux + Claude Code..."
     docker exec -d "$container" tmux new-session -d -s claude \

@@ -97,11 +97,12 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 
-# Copy notification and firewall scripts
+# Copy notification, firewall, and validation scripts
 COPY notify.sh /usr/local/bin/notify.sh
 COPY init-firewall.sh /usr/local/bin/
+COPY validate-config.sh /usr/local/bin/
 USER root
-RUN chmod +x /usr/local/bin/notify.sh /usr/local/bin/init-firewall.sh && \
+RUN chmod +x /usr/local/bin/notify.sh /usr/local/bin/init-firewall.sh /usr/local/bin/validate-config.sh && \
   echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall
 USER node
