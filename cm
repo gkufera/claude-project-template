@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Container Manager for Claude Code projects
+# Usage: ~/cm <command> [project]
+#
+# Commands:
+#   a <project>   Smart attach (start if needed, restart Claude if crashed, attach)
+#   s <project>   Start a new container
+#   x <project>   Stop and remove container
+#   st            Show status of all projects
+#   l <project>   Show container logs (last 50 lines)
+#   r <project>   Rebuild Docker image from .devcontainer/
+
+WORKSPACE_DIR="$HOME/workspace"
+CONFIG_BASE="$HOME/claude-configs"
+SHARED_CLAUDE="$HOME/.claude"
+
+usage() {
+    echo "Container Manager for Claude Code"
+    echo ""
+    echo "Usage: $0 <command> [project]"
+    echo ""
+    echo "Commands:"
+    echo "  a <project>   Smart attach (start → restart → attach)"
+    echo "  s <project>   Start a new container"
+    echo "  x <project>   Stop and remove container"
+    echo "  st            Show status of all projects"
+    echo "  l <project>   Show container logs"
+    echo "  r <project>   Rebuild Docker image"
+    exit 1
+}
+
+# Sync credentials from shared ~/.claude/ to project config dir
+sync_creds() {
+    local project="$1"
+    local config_dir="$CONFIG_BASE/$project"
+    mkdir -p "$config_dir"
+
+    if [ -f "$SHARED_CLAUDE/.credentials.json" ]; then
+        cp "$SHARED_CLAUDE/.credentials.json" "$config_dir/.credentials.json"
+    fi
+}
+
+# Copy container settings from project's .devcontainer/claude-settings.json
+copy_settings() {
+    local project="$1"
+    local config_dir="$CONFIG_BASE/$project"
+    local workspace="$WORKSPACE_DIR/$project"
+    local settings_src="$workspace/.devcontainer/claude-settings.json"
+
+    if [ -f "$settings_src" ]; then
+        cp "$settings_src" "$config_dir/settings.json"
+    fi
+}
+
+container_name() {
+    echo "claude-$1"
+}
+
+image_name() {
+    echo "claude-$1"
+}
+
+start() {
+    local project="$1"
+    local container=$(container_name "$project")
+    local image=$(image_name "$project")
+    local workspace="$WORKSPACE_DIR/$project"
+    local config_dir="$CONFIG_BASE/$project"
+
+    if docker ps -q -f "name=^${container}$" | grep -q .; then
+        echo "Container $container is already running"
+        return 0
+    fi
+
+    # Remove stopped container if exists
+    docker rm "$container" 2>/dev/null || true
+
+    if [ ! -d "$workspace" ]; then
+        echo "Error: Workspace not found at $workspace"
+        exit 1
+    fi
+
+    # Build image if it doesn't exist
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+        echo "Image $image not found, building..."
+        build "$project"
+    fi
+
+    # Set up per-project config
+    mkdir -p "$config_dir"
+    sync_creds "$project"
+    copy_settings "$project"
+
+    echo "Starting container $container..."
+    docker run -d \
+        --name "$container" \
+        --cap-add=NET_ADMIN \
+        --cap-add=NET_RAW \
+        -v "$workspace:/workspace" \
+        -v "$config_dir:/home/node/.claude" \
+        -e "NODE_OPTIONS=--max-old-space-size=4096" \
+        -e "CLAUDE_CONFIG_DIR=/home/node/.claude" \
+        -e "POWERLEVEL9K_DISABLE_GITSTATUS=true" \
+        -e "ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-opus-4-6}" \
+        "$image" \
+        sleep infinity
+
+    echo "Running firewall setup..."
+    docker exec "$container" sudo /usr/local/bin/init-firewall.sh
+
+    echo "Starting tmux + Claude Code..."
+    docker exec -d "$container" tmux new-session -d -s claude \
+        "cd /workspace && claude --dangerously-skip-permissions"
+
+    echo "Container $container started"
+}
+
+attach() {
+    local project="$1"
+    local container=$(container_name "$project")
+
+    # Sync credentials on every attach (tokens may refresh)
+    sync_creds "$project"
+
+    if ! docker ps -q -f "name=^${container}$" | grep -q .; then
+        echo "Container not running, starting..."
+        start "$project"
+    fi
+
+    # Check if tmux session exists, restart if needed
+    if ! docker exec "$container" tmux has-session -t claude 2>/dev/null; then
+        echo "Claude/tmux not running, restarting..."
+        docker exec -d "$container" tmux new-session -d -s claude \
+            "cd /workspace && claude --dangerously-skip-permissions"
+        sleep 1
+    fi
+
+    docker exec -it "$container" tmux attach-session -t claude
+}
+
+stop() {
+    local project="$1"
+    local container=$(container_name "$project")
+
+    echo "Stopping $container..."
+    docker stop "$container" 2>/dev/null || true
+    docker rm "$container" 2>/dev/null || true
+    echo "Container $container removed"
+}
+
+build() {
+    local project="$1"
+    local image=$(image_name "$project")
+    local workspace="$WORKSPACE_DIR/$project"
+
+    if [ ! -d "$workspace/.devcontainer" ]; then
+        echo "Error: No .devcontainer/ found in $workspace"
+        exit 1
+    fi
+
+    echo "Building image $image..."
+    docker build \
+        -t "$image" \
+        --build-arg "TZ=${TZ:-America/Los_Angeles}" \
+        -f "$workspace/.devcontainer/Dockerfile" \
+        "$workspace/.devcontainer/"
+    echo "Image $image built"
+}
+
+logs() {
+    local project="$1"
+    local container=$(container_name "$project")
+    docker logs --tail 50 "$container"
+}
+
+status() {
+    echo "Claude Code Containers"
+    echo "======================"
+    echo ""
+
+    # Find all projects with workspaces
+    for dir in "$WORKSPACE_DIR"/*/; do
+        local project=$(basename "$dir")
+        local container=$(container_name "$project")
+        local config_dir="$CONFIG_BASE/$project"
+
+        printf "%-20s " "$project"
+
+        if docker ps -q -f "name=^${container}$" | grep -q . 2>/dev/null; then
+            # Check if tmux/claude is running
+            if docker exec "$container" tmux has-session -t claude 2>/dev/null; then
+                printf "RUNNING"
+            else
+                printf "CONTAINER UP (Claude stopped)"
+            fi
+        elif docker ps -aq -f "name=^${container}$" | grep -q . 2>/dev/null; then
+            printf "STOPPED"
+        else
+            printf "NOT STARTED"
+        fi
+
+        # Show config status
+        if [ -d "$config_dir" ]; then
+            printf "  [config: ok]"
+        else
+            printf "  [config: none]"
+        fi
+
+        echo ""
+    done
+}
+
+# Main
+if [ $# -lt 1 ]; then
+    usage
+fi
+
+case "$1" in
+    a|attach)
+        [ $# -lt 2 ] && usage
+        attach "$2"
+        ;;
+    s|start)
+        [ $# -lt 2 ] && usage
+        start "$2"
+        ;;
+    x|stop)
+        [ $# -lt 2 ] && usage
+        stop "$2"
+        ;;
+    st|status)
+        status
+        ;;
+    l|logs)
+        [ $# -lt 2 ] && usage
+        logs "$2"
+        ;;
+    r|rebuild|build)
+        [ $# -lt 2 ] && usage
+        build "$2"
+        ;;
+    *)
+        usage
+        ;;
+esac
