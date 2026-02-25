@@ -44,9 +44,10 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     exit 1
 fi
 
-# Check we're at the repo root
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-if [ "$PWD" != "$REPO_ROOT" ]; then
+# Check we're at the repo root (resolve symlinks for macOS /tmp → /private/tmp)
+REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
+CURRENT_DIR="$(pwd -P)"
+if [ "$CURRENT_DIR" != "$REPO_ROOT" ]; then
     echo "Error: Run this from the git repository root ($REPO_ROOT)"
     exit 1
 fi
@@ -75,13 +76,20 @@ cp "$TEMPLATE_DIR/roadmap.md" .
 chmod +x .devcontainer/notify.sh .devcontainer/init-firewall.sh
 
 # Substitute template variables
-# Use | as sed delimiter since project names won't contain |
+# Escape sed special characters in replacement strings (& and \)
+ESCAPED_NAME=$(printf '%s\n' "$PROJECT_NAME" | sed 's/[&\\/]/\\&/g')
+ESCAPED_TEST=$(printf '%s\n' "$TEST_COMMAND" | sed 's/[&\\/]/\\&/g')
+
 find .claude .devcontainer PLAN.md roadmap.md -type f | while read -r file; do
-    if file "$file" | grep -q text; then
-        sed -i '' "s|{{PROJECT_NAME}}|${PROJECT_NAME}|g" "$file" 2>/dev/null || \
-        sed -i "s|{{PROJECT_NAME}}|${PROJECT_NAME}|g" "$file"
-        sed -i '' "s|{{TEST_COMMAND}}|${TEST_COMMAND}|g" "$file" 2>/dev/null || \
-        sed -i "s|{{TEST_COMMAND}}|${TEST_COMMAND}|g" "$file"
+    # Skip binary files (check for text, JSON, or any script-like content)
+    if file "$file" | grep -qE 'text|JSON|script'; then
+        # macOS sed requires -i '' ; GNU sed uses -i without arg
+        if sed -i '' "s|{{PROJECT_NAME}}|${ESCAPED_NAME}|g" "$file" 2>/dev/null; then
+            sed -i '' "s|{{TEST_COMMAND}}|${ESCAPED_TEST}|g" "$file"
+        else
+            sed -i "s|{{PROJECT_NAME}}|${ESCAPED_NAME}|g" "$file"
+            sed -i "s|{{TEST_COMMAND}}|${ESCAPED_TEST}|g" "$file"
+        fi
     fi
 done
 
