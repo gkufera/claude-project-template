@@ -143,6 +143,12 @@ start() {
     [ -d "$HOME/.aws" ] && auth_mounts="$auth_mounts -v $HOME/.aws:/home/node/.aws:ro"
     [ -d "$HOME/.railway" ] && auth_mounts="$auth_mounts -v $HOME/.railway:/home/node/.railway:ro"
 
+    # Load env file if it exists (forwards host env vars like API tokens into containers)
+    local env_file_flag=""
+    if [ -f "$HOME/.config/cm/env" ]; then
+        env_file_flag="--env-file $HOME/.config/cm/env"
+    fi
+
     echo "Starting container $container..."
     # shellcheck disable=SC2086
     docker run -d \
@@ -156,6 +162,7 @@ start() {
         -e "CLAUDE_CONFIG_DIR=/home/node/.claude" \
         -e "POWERLEVEL9K_DISABLE_GITSTATUS=true" \
         -e "ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-opus-4-6}" \
+        ${env_file_flag} \
         "$image" \
         sleep infinity
 
