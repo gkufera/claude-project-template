@@ -97,6 +97,7 @@ Server host (Ubuntu)
 ├── ~/.config/gh/                     # GitHub CLI auth (mounted read-only if present)
 ├── ~/.aws/                           # AWS credentials (mounted read-only if present)
 ├── ~/.railway/                       # Railway auth (mounted read-only if present)
+├── ~/.config/cm/env                  # API tokens forwarded to all containers (optional)
 └── Docker containers (one per project)
     ├── /workspace                    # ← bind mount of ~/workspace/<project>
     ├── /home/node/.claude            # ← bind mount of ~/claude-configs/<project>
@@ -138,6 +139,7 @@ Multiple clients can attach simultaneously via tmux.
 - **Auth mounts**: SSH keys, `.gitconfig`, gh, AWS, and Railway configs mounted read-only from host
 - **Config validation**: `validate-config.sh` runs on start AND on every re-attach — catches expired tokens between sessions
 - **Notifications**: Push notifications via [ntfy.sh](https://ntfy.sh) with project name in the title
+- **Env var forwarding**: `~/.config/cm/env` passes API tokens (Cloudflare, Stripe, etc.) into all containers
 - **Config isolation**: Each project gets its own `~/claude-configs/<project>/` directory
 
 ### CLI Tools Available in Container
@@ -223,7 +225,17 @@ These steps are done once when setting up a new server.
    ```
    Credentials are saved to host directories (`~/.config/gh/`, `~/.aws/`, `~/.railway/`) and mounted read-only into future containers.
 
-5. **ntfy.sh topic** — subscribe to your topic in the ntfy app on your phone
+5. **API tokens** (optional) — forward env vars into all containers
+   ```bash
+   mkdir -p ~/.config/cm
+   cat > ~/.config/cm/env << 'EOF'
+   CLOUDFLARE_API_TOKEN=your-token
+   STRIPE_SECRET_KEY=sk_test_xxx
+   EOF
+   ```
+   Uses Docker `--env-file` format (one `KEY=VALUE` per line, no quotes). All vars are passed to every container.
+
+6. **ntfy.sh topic** — subscribe to your topic in the ntfy app on your phone
 
 ### New Project Checklist
 
@@ -298,4 +310,5 @@ See the `cm` file in this repo for the full script. Key features:
 - Per-project Docker images built from each project's `.devcontainer/`
 - Per-project config directories for auth isolation
 - Auto-syncs credentials on attach
+- Forwards env vars from `~/.config/cm/env` into all containers
 - tmux-based session management
