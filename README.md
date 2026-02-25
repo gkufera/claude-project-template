@@ -108,19 +108,20 @@ Server host (Ubuntu)
     └── tmux session "claude"         # Claude Code runs here
 ```
 
-Auth configs are mounted **read-only** — the container consumes credentials but never writes back to the host. Run `gh auth login`, `aws configure`, etc. on the host, not inside containers.
+Auth configs are mounted **read-only** during normal operation. To set up or refresh credentials, use `~/cm auth <project>` which starts a temporary container with **writable** auth mounts (see [Server Setup Guide](#server-setup-guide-one-time-per-server)).
 
 ### Container Manager: `~/cm`
 
 Single command to manage Claude containers:
 
 ```bash
-~/cm a <project>     # Smart attach: starts if needed, restarts if crashed, then attaches
-~/cm s <project>     # Start a new container
-~/cm x <project>     # Stop and remove container
+~/cm a  <project>    # Smart attach: starts if needed, restarts if crashed, then attaches
+~/cm au <project>    # Auth setup: interactive shell with writable credential mounts
+~/cm s  <project>    # Start a new container
+~/cm x  <project>    # Stop and remove container
 ~/cm st              # Show status of all projects
-~/cm l <project>     # Show container logs (last 50 lines)
-~/cm r <project>     # Rebuild Docker image from .devcontainer/
+~/cm l  <project>    # Show container logs (last 50 lines)
+~/cm r  <project>    # Rebuild Docker image from .devcontainer/
 ```
 
 **`~/cm a <project>` is the one command you need.** It handles:
@@ -135,7 +136,7 @@ Multiple clients can attach simultaneously via tmux.
 - **Base**: Node 20 with Claude Code, tmux, zsh, gh, AWS CLI, Railway CLI, Python 3
 - **Firewall**: Outbound restricted to: GitHub (incl. Actions), npm, Anthropic API, ntfy.sh, Railway, Cloudflare, AWS (S3, SES, CloudFront, STS, IAM), PyPI
 - **Auth mounts**: SSH keys, `.gitconfig`, gh, AWS, and Railway configs mounted read-only from host
-- **Startup validation**: `validate-config.sh` checks config on container start — warns about missing auth, unset git config, placeholder topics
+- **Config validation**: `validate-config.sh` runs on start AND on every re-attach — catches expired tokens between sessions
 - **Notifications**: Push notifications via [ntfy.sh](https://ntfy.sh) with project name in the title
 - **Config isolation**: Each project gets its own `~/claude-configs/<project>/` directory
 
@@ -191,7 +192,7 @@ If you modify `.devcontainer/Dockerfile`, `notify.sh`, or `init-firewall.sh`:
 
 ### Server Setup Guide (One-Time Per Server)
 
-These steps are done once when setting up a new server. All auth happens on the **host** — credentials are then mounted read-only into every container.
+These steps are done once when setting up a new server.
 
 1. **Install `cm` script**
    ```bash
@@ -199,37 +200,30 @@ These steps are done once when setting up a new server. All auth happens on the 
    ssh your-server chmod +x ~/cm
    ```
 
-2. **SSH key** (for git push/pull over SSH)
+2. **SSH key** (for git push/pull over SSH, on the host)
    ```bash
    ssh-keygen -t ed25519
    # Add ~/.ssh/id_ed25519.pub to GitHub → Settings → SSH keys
    ```
 
-3. **Git config**
+3. **Git config** (on the host)
    ```bash
    git config --global user.name "Your Name"
    git config --global user.email "you@example.com"
    ```
 
-4. **GitHub CLI**
+4. **Authenticate CLIs** — use `cm auth` to start a temporary container with writable credential mounts. CLIs (gh, aws, railway) are installed inside the container image, not on the host.
    ```bash
-   gh auth login
-   # Verify: gh auth status
+   ~/cm auth <project>
+   # Inside the container:
+   gh auth login          # GitHub CLI (device code flow)
+   aws configure          # AWS credentials
+   railway login          # Railway CLI
+   exit
    ```
+   Credentials are saved to host directories (`~/.config/gh/`, `~/.aws/`, `~/.railway/`) and mounted read-only into future containers.
 
-5. **AWS credentials** (if project uses S3/SES/CloudFront)
-   ```bash
-   aws configure
-   # Verify: aws sts get-caller-identity
-   ```
-
-6. **Railway CLI** (if project deploys to Railway)
-   ```bash
-   railway login
-   # Verify: railway whoami
-   ```
-
-7. **ntfy.sh topic** — subscribe to your topic in the ntfy app on your phone
+5. **ntfy.sh topic** — subscribe to your topic in the ntfy app on your phone
 
 ### New Project Checklist
 
